@@ -1,10 +1,9 @@
 import asyncio
-import json
 import os
 import random
 import sys
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List
 
 import aiohttp
 from PIL import Image
@@ -33,78 +32,93 @@ class JavaScriptator2000:
     base_url = 'https://pixels.pythondiscord.com'
 
 
-    def __init__(self, tokens: List[str], pattern: List[List[str]], offset: Tuple[int, int]):
+    def __init__(self, goal: Image, tokens: List[str]):
+        self.goal = goal
         self.tokens = tokens
-        self.pattern = pattern
-        self.offset = offset
 
         self.queue = []
         self.queue_event = asyncio.Event()
-        self.request_lock = asyncio.Lock()
         self.SIZE = (160, 90)
 
 
     async def queuer(self):
         while True:
-            print('Updating all pixels')
-            async with self.request_lock:
-                async with aiohttp.request('GET', self.base_url + '/' + 'get_pixels', headers=self.random_auth()) as r:
-                    image = Image.frombytes('RGB', self.SIZE, await r.content.read())
+            self.queue_event.clear()
+            async with aiohttp.request('GET', self.base_url + '/' + 'get_pixels', headers=self.random_auth()) as r:
+                current = Image.frombytes('RGB', self.SIZE, await r.content.read())
 
-                queue = []
+            queue = []
+            goal_data = self.goal.getdata()
+            current_data = current.getdata()
 
-                for row_id, row in enumerate(self.pattern):
-                    for col_id, pattern_color in enumerate(row):
-                        pixel = Pixel(col_id + self.offset[0], row_id + self.offset[1], pattern_color)
-                        canvas_color = image.getpixel((col_id + self.offset[0], row_id + self.offset[1]))
-                        canvas_color = f'{canvas_color[0]:02x}{canvas_color[1]:02x}{canvas_color[2]:02x}'
+            for i, (goal_pixel, current_pixel) in enumerate(zip(goal_data, current_data)):
+                if goal_pixel[3] == 0:  # transparent
+                    continue
 
-                        if canvas_color != pixel.color:
-                            queue.append(pixel)
+                if goal_pixel[:3] != current_pixel:
+                    queue.append(Pixel(i % current.width, i // current.width, self.rgb2hex(*goal_pixel[:3])))
 
-                print(f'Found {len(queue)} pixels to fix')
-                random.shuffle(queue)
-                self.queue = queue
+            count = len(queue)
+            print(f'Found {count} pixels to fix')
+            self.queue = queue
 
             if self.queue:
                 self.queue_event.set()
+
             await asyncio.sleep(30)
 
 
     async def worker(self, worker_id: int, token: str):
         while True:
             await self.queue_event.wait()
-            if not self.queue:
-                print(f'[WORKER {worker_id}] Queue is empty')
+            if self.queue:
+                pixel = self.queue.pop(random.randint(0, len(self.queue) - 1))
+            else:
                 self.queue_event.clear()
+                self.worker_print(worker_id, 'Queue is empty')
                 continue
 
-            await self.request_lock.acquire()
-            pixel = self.queue.pop()
-            print(f'[WORKER {worker_id}] Setting pixel {pixel}')
+            self.worker_print(worker_id, f'Setting pixel {pixel}')
             async with aiohttp.request(
                     'POST', self.base_url + '/' + 'set_pixel',
                     json=pixel.to_dict(),
-                    headers=self.get_auth(token)
+                    headers=self.auth_header(token)
             ) as r:
-                self.request_lock.release()
-                requests_remaining = int(r.headers['requests-remaining'])
-                requests_reset = int(r.headers['requests-reset'])
-                if requests_remaining <= 0:
-                    print(
-                        f'[WORKER {worker_id}] Sleeping {requests_reset}s to '
-                        f'{(datetime.utcnow() + timedelta(seconds=requests_reset)).strftime("%H:%M:%S")}'
-                    )
-                    await asyncio.sleep(requests_reset)
+                if r.headers['Content-Type'] != 'application/json':  # Cloudflare
+                    time = int(r.headers['Retry-After'])
+                    self.worker_print(worker_id, f'Cloudflare, sleeping {time}s')
+                    await asyncio.sleep(time)
+                    continue
+
+                requests_remaining = int(r.headers['Requests-Remaining'])
+                requests_reset = int(r.headers['Requests-Reset'])
+
+            if requests_remaining <= 0:
+                self.worker_print(
+                    worker_id,
+                    f'Sleeping {requests_reset}s '
+                    f'to {(datetime.utcnow() + timedelta(seconds=requests_reset)).strftime("%H:%M:%S")}'
+                )
+                await asyncio.sleep(requests_reset)
 
 
     @staticmethod
-    def get_auth(token: str):
+    def auth_header(token: str) -> dict:
         return {'Authorization': f'Bearer {token}'}
 
 
-    def random_auth(self):
-        return self.get_auth(random.choice(self.tokens))
+    def random_auth(self) -> dict:
+        return self.auth_header(random.choice(self.tokens))
+
+
+    @staticmethod
+    def rgb2hex(r: int, g: int, b: int) -> str:
+        return f'{r:02x}{g:02x}{b:02x}'
+
+
+    @staticmethod
+    def worker_print(worker_id: int, text: str, **kwargs) -> None:
+        print(f'[WORKER {worker_id}] ' + text, **kwargs)
 
 
     def run(self, loop: asyncio.AbstractEventLoop):
@@ -115,10 +129,15 @@ class JavaScriptator2000:
 
 
 def main():
-    with open('jslogo.json') as f:
-        logo_pixels = json.loads(f.read())
+    image = Image.open('image.png')
 
-    js = JavaScriptator2000(sys.argv[1:], logo_pixels, (122, 33))
+    if image.size != (160, 90):
+        raise Exception('image.png has to be exacly 160×90')
+
+    if image.mode != 'RGBA':
+        raise Exception('image.png has to be an RGBA image')
+
+    js = JavaScriptator2000(image, sys.argv[1:])
 
     loop = asyncio.get_event_loop()
     js.run(loop)

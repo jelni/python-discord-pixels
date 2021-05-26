@@ -10,3 +10,5 @@ Get your token [here](https://pixels.pythondiscord.com/authorize)
 pip install -U aiohttp Pillow
 python pixels.py token1 token2 ...
 ```
+
+It's not recommended to use more than 2 tokens, because you will get rate limited by Cloudflare
