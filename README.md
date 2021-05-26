@@ -4,7 +4,8 @@ An asynchronous Python script made for the [Python Discord Pixels](https://pixel
 
 ## Usage
 
-Get your token [here](https://pixels.pythondiscord.com/authorize)
+- Create a 160×90 RGBA `image.png` file with your pattern. Transparent pixels will be ignored.
+- Get your token [here](https://pixels.pythondiscord.com/authorize).
 
 ```shell
 pip install -r requirements.txt -U
