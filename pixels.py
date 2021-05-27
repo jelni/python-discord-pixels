@@ -3,9 +3,10 @@ import os
 import random
 import sys
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Tuple
 
 import aiohttp
+import requests
 from PIL import Image
 
 
@@ -28,8 +29,8 @@ class Pixel:
         return f'x={self.x}, y={self.y}: {self.color}'
 
 
-class JavaScriptator2000:
-    base_url = 'https://pixels.pythondiscord.com'
+class PainTer:
+    base_url = 'https://pixels.pythondiscord.com/'
 
 
     def __init__(self, pattern: Image, tokens: List[str]):
@@ -38,14 +39,13 @@ class JavaScriptator2000:
 
         self.queue = []
         self.queue_event = asyncio.Event()
-        self.SIZE = (160, 90)
 
 
     async def queuer(self):
         while True:
             self.queue_event.clear()
-            async with aiohttp.request('GET', self.base_url + '/' + 'get_pixels', headers=self.random_auth()) as r:
-                current = Image.frombytes('RGB', self.SIZE, await r.content.read())
+            async with aiohttp.request('GET', self.base_url + 'get_pixels', headers=self.random_auth()) as r:
+                current = Image.frombytes('RGB', self.pattern.size, await r.content.read())
 
             queue = []
             pattern_data = self.pattern.getdata()
@@ -80,7 +80,7 @@ class JavaScriptator2000:
 
             self.worker_print(worker_id, f'Setting pixel {pixel}')
             async with aiohttp.request(
-                    'POST', self.base_url + '/' + 'set_pixel',
+                    'POST', self.base_url + 'set_pixel',
                     json=pixel.to_dict(),
                     headers=self.auth_header(token)
             ) as r:
@@ -128,6 +128,13 @@ class JavaScriptator2000:
             loop.create_task(self.worker(i + 1, token))
 
 
+def get_size() -> Tuple[int, int]:
+    r = requests.get(PainTer.base_url + 'get_size')
+    payload = r.json()
+
+    return payload['width'], payload['height']
+
+
 def main():
     if len(sys.argv) > 1:
         tokens = sys.argv[1:]
@@ -139,13 +146,15 @@ def main():
 
     image = Image.open('image.png')
 
-    if image.size != (160, 90):
-        raise Exception('image.png has to be exacly 160×90')
+    size = get_size()
+
+    if image.size != size:
+        raise Exception(f"image.png has to be exacly {'×'.join(map(str, size))}")
 
     if image.mode != 'RGBA':
         raise Exception('image.png has to be an RGBA image')
 
-    js = JavaScriptator2000(image, tokens)
+    js = PainTer(image, tokens)
 
     loop = asyncio.get_event_loop()
     js.run(loop)
