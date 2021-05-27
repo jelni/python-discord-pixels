@@ -32,8 +32,8 @@ class JavaScriptator2000:
     base_url = 'https://pixels.pythondiscord.com'
 
 
-    def __init__(self, goal: Image, tokens: List[str]):
-        self.goal = goal
+    def __init__(self, pattern: Image, tokens: List[str]):
+        self.pattern = pattern
         self.tokens = tokens
 
         self.queue = []
@@ -48,15 +48,15 @@ class JavaScriptator2000:
                 current = Image.frombytes('RGB', self.SIZE, await r.content.read())
 
             queue = []
-            goal_data = self.goal.getdata()
+            pattern_data = self.pattern.getdata()
             current_data = current.getdata()
 
-            for i, (goal_pixel, current_pixel) in enumerate(zip(goal_data, current_data)):
-                if goal_pixel[3] == 0:  # transparent
+            for i, (pattern_pixel, current_pixel) in enumerate(zip(pattern_data, current_data)):
+                if pattern_pixel[3] == 0:  # transparent
                     continue
 
-                if goal_pixel[:3] != current_pixel:
-                    queue.append(Pixel(i % current.width, i // current.width, self.rgb2hex(*goal_pixel[:3])))
+                if pattern_pixel[:3] != current_pixel:
+                    queue.append(Pixel(i % current.width, i // current.width, self.rgb2hex(*pattern_pixel[:3])))
 
             count = len(queue)
             print(f'Found {count} pixels to fix')
@@ -129,6 +129,14 @@ class JavaScriptator2000:
 
 
 def main():
+    if len(sys.argv) > 1:
+        tokens = sys.argv[1:]
+    else:
+        if 'PIXELS_TOKENS' in os.environ:
+            tokens = os.environ['PIXELS_TOKENS'].split(':')
+        else:
+            raise Exception('Provide at least 1 token, or set the PIXELS_TOKENS environment variable')
+
     image = Image.open('image.png')
 
     if image.size != (160, 90):
@@ -137,7 +145,7 @@ def main():
     if image.mode != 'RGBA':
         raise Exception('image.png has to be an RGBA image')
 
-    js = JavaScriptator2000(image, sys.argv[1:])
+    js = JavaScriptator2000(image, tokens)
 
     loop = asyncio.get_event_loop()
     js.run(loop)

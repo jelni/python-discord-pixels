@@ -12,4 +12,10 @@ pip install -r requirements.txt -U
 python pixels.py token1 token2 ...
 ```
 
+You can also set the `PIXELS_TOKENS` environment variable to `token1:token2:...` and run the script without any arguments.
+
 It's not recommended to use more than 2 tokens, because you will get rate limited by Cloudflare.
+
+## Heroku
+
+You can run this script on [Heroku](https://heroku.com/). To do this add the `heroku/python` Buildpack and set the `PIXELS_TOKENS` environment variable.
