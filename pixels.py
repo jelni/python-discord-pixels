@@ -3,11 +3,12 @@ import os
 import random
 import sys
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import aiohttp
 import requests
 from PIL import Image
+from multidict import CIMultiDictProxy
 
 
 if os.name == 'nt':
@@ -84,22 +85,15 @@ class PainTer:
                     json=pixel.to_dict(),
                     headers=self.auth_header(token)
             ) as r:
-                if r.headers['Content-Type'] != 'application/json':  # Cloudflare
-                    time = int(r.headers['Retry-After'])
-                    self.worker_print(worker_id, f'Cloudflare, sleeping {time}s')
-                    await asyncio.sleep(time)
-                    continue
+                time = self.process_cooldown(r.headers)
 
-                requests_remaining = int(r.headers['Requests-Remaining'])
-                requests_reset = int(r.headers['Requests-Reset'])
-
-            if requests_remaining <= 0:
+            if time:
                 self.worker_print(
                     worker_id,
-                    f'Sleeping {requests_reset}s '
-                    f'to {(datetime.utcnow() + timedelta(seconds=requests_reset)).strftime("%H:%M:%S")}'
+                    f'Sleeping {time}s '
+                    f'to {(datetime.utcnow() + timedelta(seconds=time)).strftime("%H:%M:%S")}'
                 )
-                await asyncio.sleep(requests_reset)
+                await asyncio.sleep(time)
 
 
     @staticmethod
@@ -119,6 +113,25 @@ class PainTer:
     @staticmethod
     def worker_print(worker_id: int, text: str, **kwargs) -> None:
         print(f'[WORKER {worker_id}] ' + text, **kwargs)
+
+
+    @staticmethod
+    def process_cooldown(headers: CIMultiDictProxy[str]) -> Optional[int]:
+        if 'Requests-Remaining' in headers:
+            if int(headers['Requests-Remaining']) <= 0:
+                return int(headers['Requests-Reset'])
+            else:
+                return None
+
+        if 'Cooldown-Reset' in headers:
+            print('Sending requests too fast, hit the cooldown')
+            return int(headers['Cooldown-Reset'])
+
+        if 'Retry-After' in headers:  # Cloudflare
+            print('Rate limited by Cloudflare')
+            return int(headers['Retry-After'])
+
+        return None
 
 
     def run(self, loop: asyncio.AbstractEventLoop):
