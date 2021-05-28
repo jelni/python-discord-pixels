@@ -92,6 +92,7 @@ class PainTer:
                     f'to {(datetime.utcnow() + timedelta(seconds=time)).strftime("%H:%M:%S")}'
                 )
                 await asyncio.sleep(time)
+            await asyncio.sleep(random.random())
 
 
     @staticmethod
