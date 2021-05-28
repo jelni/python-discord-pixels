@@ -11,10 +11,6 @@ from PIL import Image
 from multidict import CIMultiDictProxy
 
 
-if os.name == 'nt':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-
 class Pixel:
     def __init__(self, x: int, y: int, color: str):
         self.x = x
@@ -34,16 +30,18 @@ class PainTer:
     base_url = 'https://pixels.pythondiscord.com/'
 
 
-    def __init__(self, pattern: Image, tokens: List[str]):
+    def __init__(self, pattern: Image, tokens: List[str], loop: asyncio.AbstractEventLoop):
         self.pattern = pattern
         self.tokens = tokens
+        self.loop = loop
 
+        self.running = True
         self.queue = []
         self.queue_event = asyncio.Event()
 
 
     async def queuer(self):
-        while True:
+        while self.running:
             self.queue_event.clear()
             async with aiohttp.request('GET', self.base_url + 'get_pixels', headers=self.random_auth()) as r:
                 current = Image.frombytes('RGB', self.pattern.size, await r.content.read())
@@ -70,7 +68,7 @@ class PainTer:
 
 
     async def worker(self, worker_id: int, token: str):
-        while True:
+        while self.running:
             await self.queue_event.wait()
             if self.queue:
                 pixel = self.queue.pop(random.randint(0, len(self.queue) - 1))
@@ -127,18 +125,27 @@ class PainTer:
             print('Sending requests too fast, hit the cooldown')
             return int(headers['Cooldown-Reset'])
 
-        if 'Retry-After' in headers:  # Cloudflare
+        if 'Retry-After' in headers:
             print('Rate limited by Cloudflare')
             return int(headers['Retry-After'])
 
         return None
 
 
-    def run(self, loop: asyncio.AbstractEventLoop):
+    def run(self):
         print(f'Starting {len(self.tokens)} workers')
-        loop.create_task(self.queuer())
+
+        self.loop.create_task(self.queuer())
         for i, token in enumerate(self.tokens):
-            loop.create_task(self.worker(i + 1, token))
+            self.loop.create_task(self.worker(i + 1, token))
+
+        self.loop.run_forever()
+
+
+    def stop(self):
+        self.running = False
+        print('Stopping')
+        self.loop.stop()
 
 
 def get_size() -> Tuple[int, int]:
@@ -167,11 +174,18 @@ def main():
     if image.mode != 'RGBA':
         raise Exception('image.png has to be an RGBA image')
 
-    js = PainTer(image, tokens)
-
     loop = asyncio.get_event_loop()
-    js.run(loop)
-    loop.run_forever()
+    asyncio.set_event_loop(loop)
+    painter = PainTer(image, tokens, loop)
+
+    try:
+        painter.run()
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(e)
+    finally:
+        painter.stop()
 
 
 if __name__ == '__main__':
