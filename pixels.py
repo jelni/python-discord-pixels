@@ -115,20 +115,20 @@ class PainTer:
 
 
     @staticmethod
-    def process_cooldown(headers: CIMultiDictProxy[str]) -> Optional[int]:
+    def process_cooldown(headers: CIMultiDictProxy[str]) -> Optional[float]:
         if 'Requests-Remaining' in headers:
             if int(headers['Requests-Remaining']) <= 0:
-                return int(headers['Requests-Reset'])
+                return float(headers['Requests-Reset'])
             else:
                 return None
 
         if 'Cooldown-Reset' in headers:
             print('Sending requests too fast, hit the cooldown')
-            return int(headers['Cooldown-Reset'])
+            return float(headers['Cooldown-Reset'])
 
         if 'Retry-After' in headers:
             print('Rate limited by Cloudflare')
-            return int(headers['Retry-After'])
+            return float(headers['Retry-After'])
 
         return None
 
