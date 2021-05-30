@@ -1,6 +1,6 @@
 # Python Discord Pixels
 
-An asynchronous Python script made for the [Python Discord Pixels](https://pixels.pythondiscord.com/) event.
+A Python script made for the [Python Discord Pixels](https://pixels.pythondiscord.com/) event.
 
 ## Usage
 
