@@ -97,7 +97,7 @@ class PainTer:
             for worker in self.workers:
                 while queue and not worker.is_rate_limited(datetime.utcnow()):
                     worker.set_pixel(pop_random(queue))
-                    time.sleep(5 + random.random() * 5)
+                    time.sleep(5)
 
             now = datetime.utcnow()
             if any(not worker.is_rate_limited(now) for worker in self.workers):
