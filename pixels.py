@@ -1,14 +1,14 @@
-import asyncio
 import os
 import random
 import sys
+import time
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from pathlib import Path
+from time import sleep
+from typing import Optional
 
-import aiohttp
-import requests
+import httpx
 from PIL import Image
-from multidict import CIMultiDictProxy
 
 
 class Pixel:
@@ -26,134 +26,159 @@ class Pixel:
         return f'x={self.x}, y={self.y}: {self.color}'
 
 
-class PainTer:
-    base_url = 'https://pixels.pythondiscord.com/'
+    def __repr__(self):
+        return f'<Pixel {self}>'
 
 
-    def __init__(self, pattern: Image, tokens: List[str], loop: asyncio.AbstractEventLoop):
-        self.pattern = pattern
-        self.tokens = tokens
-        self.loop = loop
-
-        self.running = True
-        self.queue = []
-        self.queue_event = asyncio.Event()
-
-
-    async def queuer(self):
-        while self.running:
-            self.queue_event.clear()
-            async with aiohttp.request('GET', self.base_url + 'get_pixels', headers=self.random_auth()) as r:
-                current = Image.frombytes('RGB', self.pattern.size, await r.content.read())
-
-            queue = []
-            pattern_data = self.pattern.getdata()
-            current_data = current.getdata()
-
-            for i, (pattern_pixel, current_pixel) in enumerate(zip(pattern_data, current_data)):
-                if pattern_pixel[3] == 0:  # transparent
-                    continue
-
-                if pattern_pixel[:3] != current_pixel:
-                    queue.append(Pixel(i % current.width, i // current.width, self.rgb2hex(*pattern_pixel[:3])))
-
-            count = len(queue)
-            print(f'Found {count} pixels to fix')
-            self.queue = queue
-
-            if self.queue:
-                self.queue_event.set()
-
-            await asyncio.sleep(30)
+class HTTPClient:
+    def __init__(self, token: str):
+        self.token = token
+        self.client = httpx.Client(
+            base_url='https://pixels.pythondiscord.com/',
+            headers={'Authorization': f'Bearer {token}'}
+        )
 
 
-    async def worker(self, worker_id: int, token: str):
-        while self.running:
-            await self.queue_event.wait()
-            if self.queue:
-                pixel = self.queue.pop(random.randint(0, len(self.queue) - 1))
-            else:
-                self.queue_event.clear()
-                self.worker_print(worker_id, 'Queue is empty')
-                continue
+    def get_pixels(self) -> httpx.Response:
+        return self.client.request('GET', 'get_pixels')
 
-            self.worker_print(worker_id, f'Setting pixel {pixel}')
-            async with aiohttp.request(
-                    'POST', self.base_url + 'set_pixel',
-                    json=pixel.to_dict(),
-                    headers=self.auth_header(token)
-            ) as r:
-                time = self.process_cooldown(r.headers)
 
-            if time:
-                self.worker_print(
-                    worker_id,
-                    f'Sleeping {time}s '
-                    f'to {(datetime.utcnow() + timedelta(seconds=time)).strftime("%H:%M:%S")}'
-                )
-                await asyncio.sleep(time)
-            await asyncio.sleep(random.random())
+    def get_size(self) -> httpx.Response:
+        return self.client.request('GET', 'get_size', headers={})
+
+
+    def set_pixel(self, pixel: dict) -> httpx.Response:
+        return self.client.request('POST', 'set_pixel', json=pixel)
+
+
+class Worker:
+    def __init__(self, token: str):
+        self.http = HTTPClient(token)
+        self.rate_limit = None
+
+
+    def get_pixels(self) -> Image:
+        r = self.http.get_pixels()
+        size = self.get_size()
+        return Image.frombytes('RGB', size, r.content)
+
+
+    def get_size(self) -> (int, int):
+        json = self.http.get_size().json()
+        return json['width'], json['height']
+
+
+    def set_pixel(self, pixel: Pixel) -> dict:
+        r = self.http.set_pixel(pixel.to_dict())
+        self.rate_limit = self.process_cooldown(r.headers)
+        json = r.json()
+        print(json['message'])
+        return json
+
+
+    def is_rate_limited(self, when: datetime) -> bool:
+        if self.rate_limit is None:
+            return False
+
+        return self.rate_limit > when
 
 
     @staticmethod
-    def auth_header(token: str) -> dict:
-        return {'Authorization': f'Bearer {token}'}
+    def process_cooldown(headers: httpx.Headers) -> Optional[datetime]:
+        now = datetime.utcnow()
+        seconds = None
 
-
-    def random_auth(self) -> dict:
-        return self.auth_header(random.choice(self.tokens))
-
-
-    @staticmethod
-    def rgb2hex(r: int, g: int, b: int) -> str:
-        return f'{r:02x}{g:02x}{b:02x}'
-
-
-    @staticmethod
-    def worker_print(worker_id: int, text: str, **kwargs) -> None:
-        print(f'[WORKER {worker_id}] ' + text, **kwargs)
-
-
-    @staticmethod
-    def process_cooldown(headers: CIMultiDictProxy[str]) -> Optional[float]:
         if 'Requests-Remaining' in headers:
             if int(headers['Requests-Remaining']) <= 0:
-                return float(headers['Requests-Reset'])
+                seconds = float(headers['Requests-Reset'])
             else:
                 return None
 
         if 'Cooldown-Reset' in headers:
             print('Sending requests too fast, hit the cooldown')
-            return float(headers['Cooldown-Reset'])
+            seconds = float(headers['Cooldown-Reset'])
 
         if 'Retry-After' in headers:
             print('Rate limited by Cloudflare')
-            return float(headers['Retry-After'])
+            seconds = float(headers['Retry-After'])
 
-        return None
+        if seconds:
+            return now + timedelta(seconds=seconds)
+
+
+class PainTer:
+    def __init__(self, pattern: Path, tokens: list[str]):
+        self.pattern = Image.open(pattern)
+        self.workers = [Worker(token) for token in tokens]
+        self.validate_image(self.pattern)
 
 
     def run(self):
-        print(f'Starting {len(self.tokens)} workers')
+        while True:
+            queue = self.find_bad_pixels()
 
-        self.loop.create_task(self.queuer())
-        for i, token in enumerate(self.tokens):
-            self.loop.create_task(self.worker(i + 1, token))
+            if not queue:
+                print('All pixels are correct!')
+                sleep(60)
+                continue
 
-        self.loop.run_forever()
+            print(f'{len(queue)} pixels queued')
+
+            for worker in self.workers:
+                while queue and not worker.is_rate_limited(datetime.utcnow()):
+                    worker.set_pixel(self.pop_random(queue))
+                    time.sleep(5 + random.random() * 5)
+
+            now = datetime.utcnow()
+            if any(not worker.is_rate_limited(now) for worker in self.workers):
+                continue
+            sleep_time = min(worker.rate_limit - now for worker in self.workers).total_seconds()
+            print(f'Sleeping {sleep_time:.1f}s')
+            sleep(sleep_time)
 
 
-    def stop(self):
-        self.running = False
-        print('Stopping')
-        self.loop.stop()
+    def find_bad_pixels(self) -> list[Pixel]:
+        worker = random.choice(self.workers)
+        current = worker.get_pixels()
+
+        if self.pattern.size != current.size:
+            current = current.crop((0, 0) + self.pattern.size)
+
+        pattern_data = self.pattern.getdata()
+        current_data = current.getdata()
+
+        bad_pixels = []
+        for i, (pattern_pixel, current_pixel) in enumerate(zip(pattern_data, current_data)):
+            if pattern_pixel[3] == 0:  # transparent
+                continue
+
+            if pattern_pixel[:3] != current_pixel:
+                bad_pixels.append(Pixel(i % current.width, i // current.width, self.rgb2hex(*pattern_pixel[:3])))
+
+        return bad_pixels
 
 
-def get_size() -> Tuple[int, int]:
-    r = requests.get(PainTer.base_url + 'get_size')
-    payload = r.json()
+    @staticmethod
+    def rgb2hex(r: int, g: int, b: int) -> str:
+        return f'{r:02X}{g:02X}{b:02X}'
 
-    return payload['width'], payload['height']
+
+    @staticmethod
+    def pop_random(i: list):
+        return i.pop(random.randrange(len(i)))
+
+
+    def validate_image(self, image: Image) -> bool:
+        worker = random.choice(self.workers)
+        size = worker.get_size()
+
+        if image.width > size[0] or image.height > size[1]:
+            raise Exception(f"image.png cannot be larger than {'×'.join(map(str, size))}")
+
+        if image.mode != 'RGBA':
+            raise Exception('image.png has to be an RGBA image')
+
+        return True
 
 
 def main():
@@ -165,28 +190,14 @@ def main():
         else:
             raise Exception('Provide at least 1 token, or set the PIXELS_TOKENS environment variable')
 
-    image = Image.open('image.png')
-
-    size = get_size()
-
-    if image.size != size:
-        raise Exception(f"image.png has to be exacly {'×'.join(map(str, size))}")
-
-    if image.mode != 'RGBA':
-        raise Exception('image.png has to be an RGBA image')
-
-    loop = asyncio.get_event_loop()
-    asyncio.set_event_loop(loop)
-    painter = PainTer(image, tokens, loop)
+    painter = PainTer(Path('image.png'), tokens)
 
     try:
         painter.run()
     except KeyboardInterrupt:
         pass
-    except Exception as e:
-        print(e)
     finally:
-        painter.stop()
+        return
 
 
 if __name__ == '__main__':
