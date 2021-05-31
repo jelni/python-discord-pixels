@@ -46,7 +46,7 @@ class Worker:
         r = self.client.request('POST', 'set_pixel', json=pixel.to_dict())
         self.rate_limit = self.process_cooldown(r.headers)
         json = r.json()
-        print(json['message'])
+        print(json.get('message', json))
         return json
 
     def is_rate_limited(self, when: datetime) -> bool:
@@ -103,6 +103,8 @@ class PainTer:
             if any(not worker.is_rate_limited(now) for worker in self.workers):
                 continue
             sleep_time = min(worker.rate_limit - now for worker in self.workers).total_seconds()
+            if sleep_time > 5:
+                sleep_time += 2
             print(f'Sleeping {sleep_time:.1f}s')
             time.sleep(sleep_time)
 
@@ -157,6 +159,8 @@ def main():
     image = Image.open('image.png')
     validate_image(image)
     painter = PainTer(image, [Worker(token) for token in tokens])
+
+    print(f'Using {len(painter.workers)} workers')
 
     try:
         painter.run()
