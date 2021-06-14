@@ -28,7 +28,8 @@ class Worker:
         self.token = token
         self.client = httpx.Client(
             base_url='https://pixels.pythondiscord.com/',
-            headers={'Authorization': f'Bearer {token}'}
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=30
         )
         self.rate_limit = None
 
@@ -89,7 +90,7 @@ class PainTer:
 
             if not queue:
                 print('All pixels are correct!')
-                time.sleep(60)
+                time.sleep(20)
                 continue
 
             print(f'{len(queue)} pixels queued')
@@ -165,8 +166,6 @@ def main():
     try:
         painter.run()
     except KeyboardInterrupt:
-        pass
-    finally:
         return
 
 
