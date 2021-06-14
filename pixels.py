@@ -47,14 +47,8 @@ class Worker:
         r = self.client.request('POST', 'set_pixel', json=pixel.to_dict())
         self.rate_limit = self.process_cooldown(r.headers)
         json = r.json()
-        print(json.get('message', json))
+        print(f"{r.status_code}: {json['message']}")
         return json
-
-    def is_rate_limited(self, when: datetime) -> bool:
-        if self.rate_limit is None:
-            return False
-
-        return self.rate_limit > when
 
     @staticmethod
     def process_cooldown(headers: httpx.Headers) -> Optional[datetime]:
@@ -75,8 +69,10 @@ class Worker:
             print('Rate limited by Cloudflare')
             seconds = float(headers['Retry-After'])
 
-        if seconds:
+        if seconds is not None:
             return now + timedelta(seconds=seconds)
+
+        return None
 
 
 class PainTer:
@@ -96,16 +92,20 @@ class PainTer:
             print(f'{len(queue)} pixels queued')
 
             for worker in self.workers:
-                while queue and not worker.is_rate_limited(datetime.utcnow()):
+                while queue and (worker.rate_limit is None or worker.rate_limit < datetime.utcnow()):
                     worker.set_pixel(pop_random(queue))
                     time.sleep(5)
 
             now = datetime.utcnow()
-            if any(not worker.is_rate_limited(now) for worker in self.workers):
+            rate_limits = [worker.rate_limit - now for worker in self.workers if worker.rate_limit is not None]
+            if not rate_limits:
                 continue
-            sleep_time = min(worker.rate_limit - now for worker in self.workers).total_seconds()
-            if sleep_time > 5:
-                sleep_time += 2
+            sleep_time = min(rate_limits).total_seconds()
+            if sleep_time <= 0:
+                continue
+            elif sleep_time < 5:
+                sleep_time = 5
+
             print(f'Sleeping {sleep_time:.1f}s')
             time.sleep(sleep_time)
 
@@ -164,7 +164,12 @@ def main():
     print(f'Using {len(painter.workers)} workers')
 
     try:
-        painter.run()
+        while True:
+            try:
+                painter.run()
+            except httpx.RequestError as e:
+                print(f'ERROR: {e}')
+                time.sleep(60)
     except KeyboardInterrupt:
         return
 
