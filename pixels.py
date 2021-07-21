@@ -151,11 +151,10 @@ def validate_image(image: Image) -> None:
 def main():
     if len(sys.argv) > 1:
         tokens = sys.argv[1:]
+    elif 'PIXELS_TOKENS' in os.environ:
+        tokens = os.environ['PIXELS_TOKENS'].split(':')
     else:
-        if 'PIXELS_TOKENS' in os.environ:
-            tokens = os.environ['PIXELS_TOKENS'].split(':')
-        else:
-            raise Exception('Provide at least 1 token, or set the PIXELS_TOKENS environment variable')
+        raise Exception('Provide at least 1 token, or set the PIXELS_TOKENS environment variable')
 
     image = Image.open('image.png')
     validate_image(image)
